@@ -10,10 +10,15 @@ Differences from the "keep a PC on" version:
 - Still deduplicates via seen_links.json, which the GitHub Actions
   workflow commits back to the repo after each run so state persists
   between runs.
+- Only alerts on articles published within the last lookback window,
+  since Google News RSS links can change over time for the same
+  article, which would otherwise slip past link-based dedup alone.
 """
 
+import calendar
 import json
 import os
+import time
 import urllib.parse
 
 import feedparser
@@ -35,6 +40,7 @@ EXTRA_FEEDS = [
 
 SEEN_FILE = "seen_links.json"
 MAX_SEEN_ENTRIES = 2000  # keep the file from growing forever
+PUBDATE_LOOKBACK_MINUTES = 20  # slightly wider than the 15-min schedule as a safety buffer
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -88,6 +94,7 @@ def build_feed_list() -> list:
 def main():
     seen = load_seen()
     new_matches = 0
+    cutoff = time.time() - (PUBDATE_LOOKBACK_MINUTES * 60)
 
     for feed_url in build_feed_list():
         parsed = feedparser.parse(feed_url)
@@ -96,7 +103,18 @@ def main():
             title = entry.get("title", "")
             summary = entry.get("summary", "")
 
-            if not link or link in seen:
+            if not link:
+                continue
+
+            published = entry.get("published_parsed")
+            if published:
+                published_ts = calendar.timegm(published)
+                if published_ts < cutoff:
+                    continue
+            elif link in seen:
+                continue
+
+            if link in seen:
                 continue
 
             hit = matches_keyword(f"{title} {summary}")
